@@ -1,0 +1,694 @@
+<!DOCTYPE html> 
+<html lang="en" class="h-full"> 
+<head>     
+    <meta charset="UTF-8">     
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">     
+    <title>Fake News Spread Visualizer</title>     
+    <script src="https://cdn.tailwindcss.com"></script>     
+    <script src="https://d3js.org/d3.v7.min.js"></script>     
+    <style>
+        * {
+            box-sizing: border-box;
+        }
+        
+        html, body {
+            margin: 0;
+            padding: 0;
+            width: 100%;
+            height: 100vh;
+            overflow: hidden;
+        }
+        
+        #graph-svg {
+            width: 100%;
+            height: 100%;
+            min-height: calc(100vh - 80px);
+        }         
+        /* Custom styles for graph elements */         
+        .node {             
+            transition: fill 0.3s ease;             
+            stroke: #333;             
+            stroke-width: 1.5px;         
+        }         
+        .link {             
+            stroke: #999;             
+            stroke-opacity: 0.6;             
+            transition: stroke 0.3s ease;         
+        }         
+                
+        /* Node status colors */         
+        .node.healthy { fill: #9CA3AF; /* gray-400 */ }         
+        .node.infected { fill: #DC2626; /* red-600 */ }         
+        .node.source { fill: #7F1D1D; /* red-900 */ }         
+        .node.traced-bfs { fill: #3B82F6; /* blue-500 */ }         
+        .node.traced-dfs { fill: #16A34A; /* green-600 */ }         
+        .node.current {             
+            fill: #FACC15; /* yellow-400 */             
+            stroke: #FACC15;             
+            stroke-width: 4px;         
+        }         
+        .link.traced-bfs { stroke: #3B82F6; stroke-opacity: 1; stroke-width: 2.5px; }         
+        .link.traced-dfs { stroke: #16A34A; stroke-opacity: 1; stroke-width: 2.5px; }         
+        
+        /* Style for nodes when in 'select source' mode */         
+        body.selecting-source .node.healthy {             
+            cursor: pointer;             
+            fill: #FACC15; /* yellow-400 */             
+            stroke: #FDE047; /* yellow-300 */         }         
+        
+        /* Style for node ID labels */         
+        .node-label {             
+            font-size: 10px;             
+            fill: #E5E7EB; /* gray-200 */             
+            text-anchor: middle;             
+            dy: 4px; /* Vertical alignment */             
+            pointer-events: none; /* Allows click-through to the circle */         }     
+    </style> 
+</head> 
+
+<body class="font-sans bg-gray-900 text-white h-screen flex flex-col overflow-hidden">
+    <!-- Header with compact controls -->
+    <div class="bg-gray-800 shadow-lg flex-shrink-0">
+        <div class="container mx-auto px-2 py-1">
+            <h1 class="text-xl font-bold text-center text-transparent bg-clip-text bg-gradient-to-r from-red-500 to-yellow-500">
+                Fake News Spread Visualizer
+            </h1>
+        </div>
+        <!-- Controls -->
+        <div class="bg-gray-800 p-1 w-full">
+        <div class="container mx-auto flex flex-wrap gap-2 justify-center items-center">         
+        <label for="node-count" class="text-sm font-medium mr-1">Nodes:</label>         
+        <input type="number" id="node-count" value="40" min="10" max="200" class="bg-gray-700 text-white rounded-lg py-2 px-3 w-24 text-center">         
+                
+        <button id="start-spread" class="bg-red-600 hover:bg-red-700 text-white font-bold py-2 px-4 rounded-lg transition-colors">             
+            Start Fake News Spread         
+        </button>         
+        <button id="trace-bfs" class="bg-blue-500 hover:bg-blue-600 text-white font-bold py-2 px-4 rounded-lg transition-colors" disabled>             
+            Trace with BFS         
+        </button>         
+        <button id="trace-dfs" class="bg-green-600 hover:bg-green-700 text-white font-bold py-2 px-4 rounded-lg transition-colors" disabled>             
+            Trace with DFS         
+        </button>         
+        <button id="reset" class="bg-gray-600 hover:bg-gray-700 text-white font-bold py-2 px-4 rounded-lg transition-colors">             
+            Reset Graph         
+        </button>         
+
+        <!-- Patient Zero by ID -->         
+        <div class="ml-4 border-l border-gray-600 pl-4 flex gap-2 items-center">             
+            <label for="patient-zero-id" class="text-sm font-medium">Start from ID:</label>             
+            <input type="number" id="patient-zero-id" class="bg-gray-700 text-white rounded-lg py-1 px-2 w-16 text-center">             
+            <button id="start-from-id" class="bg-red-800 hover:bg-red-900 text-white font-bold py-1 px-2 rounded-lg transition-colors">                 
+                Start             
+            </button>         
+        </div>     
+    </div>     
+</div>
+
+    <!-- Main Content Area -->
+    <div class="flex-1 w-full bg-gray-800 relative" style="height: calc(100vh - 120px);">
+        <svg id="graph-svg" style="width: 100%; height: 100%; background-color: #1F2937;"></svg>
+        
+        <!-- Log Overlay -->         
+        <div id="log-container" style="position: absolute; bottom: 16px; left: 16px; width: 400px; max-height: 200px; background-color: rgba(17, 24, 39, 0.95); border: 1px solid #374151; border-radius: 0.5rem; padding: 12px; overflow-y: auto; box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06); z-index: 1000;">             
+            <h3 style="font-size: 0.875rem; font-weight: 600; color: white; border-bottom: 1px solid #4B5563; padding-bottom: 4px; margin-bottom: 8px;">Event Log</h3>             
+            <div id="log-content" style="font-family: monospace; font-size: 0.75rem; color: #E5E7EB; display: flex; flex-direction: column; gap: 4px;">                 
+                <p>Click "Start Fake News Spread" to begin.</p>             
+            </div>         
+        </div>     
+    </div>     
+
+    <script type="module">         
+        // --- Graph Settings ---         
+        const SPREAD_DELAY = 500; // ms between spread steps         
+        const TRACE_DELAY = 150; // ms for BFS/DFS visualization         
+        const NODE_RADIUS = 8;         
+
+        // --- State Variables ---         
+        let nodes = [];         
+        let links = [];         
+        let simulation;         
+        let svg, linkG, nodeG;         
+        let adj = {}; // Adjacency list         
+        let spreadInterval;         
+        let traceInProgress = false;         
+        let hasSpread = false;         
+        let patientZero = null;         
+        let currentNumNodes = 0; // Keep track of the actual number of nodes         
+        let isSelectingSource = false; // <-- ADD: State for selecting source node         
+
+        const logContent = d3.select("#log-content");         
+        const startBtn = d3.select("#start-spread");         
+        const bfsBtn = d3.select("#trace-bfs");         
+        const dfsBtn = d3.select("#trace-dfs");         
+        const resetBtn = d3.select("#reset");         
+        const nodeCountInput = d3.select("#node-count"); // Get the input         
+        const patientZeroInput = d3.select("#patient-zero-id");         
+        const startFromIdBtn = d3.select("#start-from-id");         
+
+        // --- Helper Functions ---         
+                
+        /**         
+         * Adds a message to the on-screen log.         
+         */         
+        function log(message) {             
+            console.log(message);
+            const timestamp = new Date().toLocaleTimeString();
+            const logEntry = `[${timestamp}] ${message}`;
+            const logElement = document.createElement('p');
+            logElement.textContent = logEntry;
+            logElement.style.margin = '0';
+            logElement.style.padding = '2px 0';
+            logElement.style.borderBottom = '1px solid rgba(255, 255, 255, 0.1)';
+            
+            const logContent = document.getElementById('log-content');
+            logContent.insertBefore(logElement, logContent.firstChild);
+            
+            // Limit log to 20 messages
+            while (logContent.children.length > 20) {
+                logContent.removeChild(logContent.lastChild);
+            }
+        }         
+
+        /**         
+         * Utility for async sleep.         
+         */         
+        function sleep(ms) {             
+            return new Promise(resolve => setTimeout(resolve, ms));         
+        }         
+
+        /**         
+         * Updates node and link classes based on node status.         
+         */         
+        function updateVisualization() {             
+            // Update Nodes             
+            nodeG.selectAll("circle.node")                 
+                .data(nodes, d => d.id)                 
+                .attr("class", d => `node ${d.status || 'healthy'}`);             
+
+            // Update Links (for tracing)             
+            linkG.selectAll("line.link")                 
+                .data(links)                 
+                .attr("class", d => {                     
+                    const sourceStatus = d.source.status;                     
+                    const targetStatus = d.target.status;                     
+                    let traceClass = "";                     
+                    if (sourceStatus === 'traced-bfs' && targetStatus === 'traced-bfs') {                         
+                        traceClass = 'traced-bfs';                     
+                    } else if (sourceStatus === 'traced-dfs' && targetStatus === 'traced-dfs') {                         
+                        traceClass = 'traced-dfs';                     
+                    }                     
+                    return `link ${traceClass}`;                 
+                });         
+        }         
+                
+        /**         
+         * Highlights the "current" node in a trace.         
+         */         
+        function highlightCurrent(nodeId, status) {             
+            nodeG.selectAll("circle.node")                 
+                .classed("current", d => d.id === nodeId && status);         
+        }         
+
+        /**         
+         * Resets all node/link states and stops simulations.         
+         */         
+        function resetGraph() {             
+            if (spreadInterval) clearInterval(spreadInterval);             
+            spreadInterval = null;             
+            traceInProgress = false;             
+            hasSpread = false;             
+            patientZero = null;             
+            isSelectingSource = false; // <-- ADD             
+            d3.select("body").classed("selecting-source", false); // <-- ADD             
+
+            nodes.forEach(n => {                 
+                n.status = 'healthy';                 
+                n.infectedBy = null;            
+            });             
+                        
+            updateVisualization();             
+            log("Graph reset.");             
+
+            startBtn.attr("disabled", null);             
+            startBtn.text("Start Fake News Spread"); // <-- ADD: Reset button text             
+            bfsBtn.attr("disabled", true);             
+            dfsBtn.attr("disabled", true);             
+            patientZeroInput.property("value", ""); // Clear input         
+        }         
+
+        /**         
+         * Ensures all nodes are connected in a single component.         
+         * Adds minimal links to achieve this.         
+         */         
+        function ensureConnectedGraph() {             
+            if (nodes.length <= 1) return; // Nothing to connect if 0 or 1 node             
+
+            let visited = new Set();             
+            let queue = [];             
+            let components = [];             
+
+            // Find all connected components             
+            for (const startNode of nodes) {                 
+                if (!visited.has(startNode.id)) {                     
+                    let currentComponent = [];                     
+                    queue.push(startNode.id);                     
+                    visited.add(startNode.id);                     
+                    while (queue.length > 0) {                         
+                        const nodeId = queue.shift();                         
+                        currentComponent.push(nodeId);                         
+                        adj[nodeId].forEach(neighborId => {                             
+                            if (!visited.has(neighborId)) {                                 
+                                visited.add(neighborId);                                 
+                                queue.push(neighborId);                             
+                            }                         
+                        });                     
+                    }                     
+                    components.push(currentComponent);                 
+                }             
+            }             
+                        
+            // Connect components if there's more than one             
+            for (let i = 0; i < components.length - 1; i++) {                 
+                const component1NodeId = components[i][0]; // Pick first node of component 1                 
+                const component2NodeId = components[i+1][0]; // Pick first node of component 2                 
+
+                // Add a link between them                 
+                if (!adj[component1NodeId].includes(component2NodeId)) {                     
+                    links.push({ source: component1NodeId, target: component2NodeId });                     
+                    adj[component1NodeId].push(component2NodeId);                     
+                    adj[component2NodeId].push(component1NodeId);                     
+                    log(`Connected Node ${component1NodeId} and Node ${component2NodeId} to ensure graph connectivity.`);                 
+                }             
+            }         
+        }         
+
+        /**         
+         * Generates a random graph and builds the adjacency list.         
+         */         
+        function generateGraph() {             
+            const numNodes = parseInt(nodeCountInput.property("value"), 10);             
+            if (isNaN(numNodes) || numNodes < 10 || numNodes > 200) {                 
+                log("Please enter a node count between 10 and 200. Setting to 40.");                 
+                nodeCountInput.property("value", 40);                 
+                currentNumNodes = 40;             
+            } else {                 
+                currentNumNodes = numNodes;             
+            }             
+
+            nodes = d3.range(currentNumNodes).map(i => ({ id: i, status: 'healthy' }));             
+            links = [];             
+            adj = {};             
+            nodes.forEach(n => adj[n.id] = []);             
+
+            // Generate initial random links             
+            for (let i = 0; i < currentNumNodes * 2; i++) { // Increased number of initial random links                 
+                const a = Math.floor(Math.random() * currentNumNodes);                 
+                const b = Math.floor(Math.random() * currentNumNodes);                                 
+                
+                // Avoid self-loops and duplicate edges                 
+                if (a !== b && !adj[a].includes(b)) {                     
+                    links.push({ source: a, target: b });                     
+                    adj[a].push(b);                     
+                    adj[b].push(a); // Undirected graph                 
+                }             
+            }             
+
+            // Ensure all nodes are connected             
+            ensureConnectedGraph();         
+        }         
+
+        /**         
+         * Initializes the D3 force simulation.         
+         */         
+        function initializeSimulation() {             
+            svg = d3.select("#graph-svg");             
+            const width = svg.node().getBoundingClientRect().width;             
+            const height = svg.node().getBoundingClientRect().height;             
+
+            svg.html(""); // Clear previous SVG content             
+
+            // Add zoom and pan             
+            const zoom = d3.zoom().on("zoom", (event) => {                 
+                svg.select("g").attr("transform", event.transform);             
+            });             
+            svg.call(zoom);             
+
+            const container = svg.append("g");             
+            linkG = container.append("g").attr("class", "links");             
+            nodeG = container.append("g").attr("class", "nodes");             
+
+            simulation = d3.forceSimulation(nodes)                 
+                .force("link", d3.forceLink(links).id(d => d.id).distance(50))                 
+                .force("charge", d3.forceManyBody().strength(-150))                 
+                .force("center", d3.forceCenter(width / 2, height / 2))                 
+                .on("tick", ticked);             
+
+            // Draw links             
+            linkG.selectAll("line.link")                 
+                .data(links)                 
+                .join("line")                 
+                .attr("class", "link");             
+
+            // Draw nodes             
+            nodeG.selectAll("circle.node")                 
+                .data(nodes, d => d.id)                 
+                .join("circle")                 
+                .attr("class", "node healthy")                 
+                .attr("r", NODE_RADIUS)                 
+                .on("click", nodeClicked) // <-- ADD: Click handler for selection                 
+                .call(drag(simulation));             
+
+            // Draw node labels             
+            nodeG.selectAll("text.node-label")                 
+                .data(nodes, d => d.id)                 
+                .join("text")                 
+                .attr("class", "node-label")                 
+                .text(d => d.id);             
+
+            simulation.alpha(1).restart();         
+        }         
+
+        /**         
+         * D3 simulation tick function.         
+         */         
+        function ticked() {             
+            linkG.selectAll("line")                 
+                .attr("x1", d => d.source.x)                 
+                .attr("y1", d => d.source.y)                 
+                .attr("x2", d => d.target.x)                 
+                .attr("y2", d => d.target.y);             
+
+            nodeG.selectAll("circle")                 
+                .attr("cx", d => d.x)                 
+                .attr("cy", d => d.y);             
+                        
+            // Update label positions             
+            nodeG.selectAll("text.node-label")                 
+                .attr("x", d => d.x)                 
+                .attr("y", d => d.y);         
+        }         
+
+        /**         
+         * D3 drag handler.         
+         */         
+        function drag(simulation) {             
+            function dragstarted(event, d) {                 
+                // If user starts dragging, cancel selection mode                 
+                if (isSelectingSource) {                     
+                    isSelectingSource = false;                     
+                    d3.select("body").classed("selecting-source", false);                     
+                    startBtn.text("Start Fake News Spread");                     
+                    log("Node selection cancelled.");                     
+                    updateVisualization(); // Reset node colors                 
+                }                 
+
+                if (!event.active) simulation.alphaTarget(0.3).restart();                 
+                d.fx = d.x;                 
+                d.fy = d.y;             
+            }             
+            
+            function dragged(event, d) {                 
+                d.fx = event.x;                 
+                d.fy = event.y;             
+            }             
+            
+            function dragended(event, d) {                 
+                if (!event.active) simulation.alphaTarget(0);                 
+                d.fx = null;                 
+                d.fy = null;             
+            }             
+            
+            return d3.drag()                 
+                .on("start", dragstarted)                 
+                .on("drag", dragged)                 
+                .on("end", dragended);         
+        }         
+
+        // --- Core Logic Functions ---         
+
+        /**         
+         * Puts the app into 'select source' mode.         
+         */         
+        function startSpread() {             
+            if (traceInProgress || hasSpread) return;             
+            resetGraph();             
+            isSelectingSource = true;             
+                        
+            d3.select("body").classed("selecting-source", true);             
+            log("Select a node to start the spread...");             
+            startBtn.text("Click a node to be the source...");             
+            updateVisualization(); // To update node colors         
+        }         
+
+        /**         
+         * Handles clicking on a node. Used for selecting the source.         
+         */         
+        function nodeClicked(event, d) {             
+            // Only act if we are in 'select source' mode             
+            if (isSelectingSource) {                 
+                isSelectingSource = false;                 
+                d3.select("body").classed("selecting-source", false);                 
+                startBtn.text("Start Fake News Spread"); // Reset button text                 
+                executeSpread(d); // Start the spread from this node             
+            }         
+        }         
+
+        /**         
+         * Starts the fake news spread simulation (BFS-based) from a specific node.         
+         */         
+        function executeSpread(sourceNode) {             
+            if (!sourceNode || hasSpread) return; // Check if already spread                         
+
+            hasSpread = true;             
+            patientZero = sourceNode;             
+            patientZero.status = 'source';             
+            log(`Spread started from Node ${patientZero.id}`);             
+
+            let queue = [patientZero];             
+            let infectedSet = new Set();             
+            infectedSet.add(patientZero.id);             
+
+            startBtn.attr("disabled", true);             
+                        
+            spreadInterval = setInterval(() => {                 
+                if (queue.length === 0) {                     
+                    clearInterval(spreadInterval);                     
+                    spreadInterval = null;                     
+                    log("Fake news has fully spread.");                     
+                    bfsBtn.attr("disabled", null);                     
+                    dfsBtn.attr("disabled", null);                     
+                    return;                 
+                }                 
+
+                let nextQueue = [];                                 
+                
+                // Process all nodes at the current level                 
+                while(queue.length > 0) {                     
+                    const current = queue.shift();                                         
+                    
+                    // Infect neighbors                     
+                    adj[current.id].forEach(neighborId => {                         
+                        if (!infectedSet.has(neighborId)) {                             
+                            const neighborNode = nodes.find(n => n.id === neighborId);                             
+                            if (neighborNode) {                                 
+                                infectedSet.add(neighborId);                                 
+                                neighborNode.status = 'infected';                                 
+                                neighborNode.infectedBy = current.id;                                 
+                                nextQueue.push(neighborNode);                             
+                            }                         
+                        }                     
+                    });                 
+                }                 
+                
+                queue = nextQueue;                 
+                updateVisualization();             
+            }, SPREAD_DELAY);         
+        }         
+
+        /**         
+         * Visualizes a BFS trace from a random infected node.         
+         */         
+        async function traceBFS() {             
+            if (traceInProgress) return;             
+                        
+            const infectedNodes = nodes.filter(n => n.status === 'infected' || n.status === 'source');             
+            if (infectedNodes.length === 0) {                 
+                log("No infected nodes to trace from.");                 
+                return;             
+            }             
+                        
+            traceInProgress = true;             
+            startBtn.attr("disabled", true);             
+            bfsBtn.attr("disabled", true);             
+            dfsBtn.attr("disabled", true);             
+                        
+            // Reset trace statuses             
+            nodes.forEach(n => {                 
+                if (n.status.startsWith('traced')) n.status = 'infected';             
+            });             
+            
+            if (patientZero) patientZero.status = 'source';             
+            updateVisualization();             
+            await sleep(100);             
+
+            // Pick a random infected node to start trace             
+            const startNode = infectedNodes[Math.floor(Math.random() * infectedNodes.length)];             
+            log(`Tracing with BFS from Node ${startNode.id}...`);             
+                        
+            let queue = [startNode];             
+            let visited = new Set();             
+            visited.add(startNode.id);             
+            startNode.status = 'traced-bfs';             
+
+            while(queue.length > 0) {                 
+                const current = queue.shift();                 
+                highlightCurrent(current.id, true);                                 
+                
+                // Check if we found the source                 
+                if (current.id === patientZero.id) {                     
+                    log(`BFS: Found original source (Node ${current.id})!`);                     
+                    // We could stop here or continue tracing                 
+                }                 
+
+                await sleep(TRACE_DELAY);                                 
+                
+                for (const neighborId of adj[current.id]) {                     
+                    const neighborNode = nodes.find(n => n.id === neighborId);                                         
+                    
+                    // Only trace within the infected cluster                     
+                    if (neighborNode && (neighborNode.status === 'infected' || neighborNode.status === 'source') && !visited.has(neighborId)) {                         
+                        visited.add(neighborId);                         
+                        neighborNode.status = 'traced-bfs';                         
+                        queue.push(neighborNode);                     
+                    }                 
+                }                                 
+                
+                highlightCurrent(current.id, false);                 
+                updateVisualization();             
+            }             
+
+            log("BFS trace complete.");             
+            traceInProgress = false;             
+            startBtn.attr("disabled", null); // Re-enable spread             
+            bfsBtn.attr("disabled", null);             
+            dfsBtn.attr("disabled", null);         
+        }         
+
+        /**         
+         * Visualizes a DFS trace from a random infected node.         
+         */         
+        async function traceDFS() {             
+            if (traceInProgress) return;             
+                        
+            const infectedNodes = nodes.filter(n => n.status === 'infected' || n.status === 'source');             
+            if (infectedNodes.length === 0) {                 
+                log("No infected nodes to trace from.");                 
+                return;             
+            }             
+
+            traceInProgress = true;             
+            startBtn.attr("disabled", true);             
+            bfsBtn.attr("disabled", true);             
+            dfsBtn.attr("disabled", true);             
+
+            // Reset trace statuses             
+            nodes.forEach(n => {                 
+                if (n.status.startsWith('traced')) n.status = 'infected';             
+            });             
+            
+            if (patientZero) patientZero.status = 'source';             
+            updateVisualization();             
+            await sleep(100);             
+
+            const startNode = infectedNodes[Math.floor(Math.random() * infectedNodes.length)];             
+            log(`Tracing with DFS from Node ${startNode.id}...`);             
+
+            let visited = new Set();             
+            // DFS will be recursive, no explicit stack needed here             
+            // let stack = [startNode]; // Removed as dfsRecursive uses implicit call stack             
+
+            async function dfsRecursive(current) {                 
+                if (traceInProgress === false) return; // Check for reset                                 
+                
+                visited.add(current.id);                 
+                current.status = 'traced-dfs';                 
+                highlightCurrent(current.id, true);                 
+                updateVisualization();                 
+                await sleep(TRACE_DELAY);                                 
+                
+                if (current.id === patientZero.id) {                     
+                    log(`DFS: Found original source (Node ${current.id})!`);                 
+                }                 
+
+                for (const neighborId of adj[current.id]) {                     
+                    const neighborNode = nodes.find(n => n.id === neighborId);                                         
+                    
+                    if (neighborNode && (neighborNode.status === 'infected' || neighborNode.status === 'source' || neighborNode.status === 'traced-dfs') && !visited.has(neighborId)) {                         
+                        await dfsRecursive(neighborNode);                     
+                    }                 
+                }                                 
+                
+                highlightCurrent(current.id, false);                 
+                updateVisualization();             
+            }             
+
+            await dfsRecursive(startNode);             
+                        
+            log("DFS trace complete.");             
+            traceInProgress = false;             
+            startBtn.attr("disabled", null);             
+            bfsBtn.attr("disabled", null);             
+            dfsBtn.attr("disabled", null);         
+        }         
+
+        /**         
+         * Starts the spread from a specific Node ID from the input box.         
+         */         
+        function startFromId() {             
+            if (traceInProgress || hasSpread) return;             
+
+            const id = parseInt(patientZeroInput.property("value"), 10);             
+
+            // Validation             
+            if (isNaN(id)) {                 
+                log("Error: Please enter a valid number for the Node ID.");                 
+                return;             
+            }             
+                        
+            const sourceNode = nodes.find(n => n.id === id);             
+
+            if (!sourceNode) {                 
+                log(`Error: Node ID ${id} not found. Valid IDs are 0 to ${currentNumNodes - 1}.`);                 
+                return;             
+            }             
+
+            // If valid, reset everything and start the spread             
+            resetGraph();             
+            executeSpread(sourceNode);         
+        }         
+
+        // --- Initialization ---         
+        function main() {             
+            generateGraph();             
+            initializeSimulation();             
+
+            // Event Listeners             
+            startBtn.on("click", startSpread);             
+            bfsBtn.on("click", traceBFS);             
+            dfsBtn.on("click", traceDFS);             
+            resetBtn.on("click", () => {                 
+                traceInProgress = false; // Stop any ongoing traces                 
+                if (spreadInterval) clearInterval(spreadInterval);                 
+                generateGraph();                 
+                initializeSimulation();                 
+                resetGraph();                 
+                log("New graph generated.");             
+            });             
+            
+            startFromIdBtn.on("click", startFromId);         
+        }         
+
+        main();     
+    </script> 
+</body> 
+</html>
